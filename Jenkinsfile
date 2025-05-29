@@ -1,71 +1,84 @@
 pipeline {
     agent any
+
     stages {
         stage('Checkout') {
             steps {
-                git branch: env.BRANCH_NAME, url: 'https://github.com/povolyaev/practice_2025.git'
+                script {
+                    def scmVars = checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '**']],
+                        extensions: [
+                            [$class: 'LocalBranch', localBranch: '**']
+                        ],
+                        userRemoteConfigs: [[
+                            url: 'https://github.com/povolyaev/practice_2025.git'
+                        ]]
+                    ])
+                    env.BRANCH_NAME = scmVars.GIT_BRANCH.replace('origin/', '')
+                    echo "Detected branch: ${env.BRANCH_NAME}"
+                }
             }
         }
 
-        stage('Build') {
+        stage('Build Code') {
             steps {
-                sh 'mvn clean compile'
+                bat 'mvn clean compile'
             }
         }
 
         stage('Run Tests') {
             when {
-                expression { return env.BRANCH_NAME.startsWith('feature/') }
+                expression { env.BRANCH_NAME.startsWith("feature/") }
             }
             steps {
-                sh 'mvn test'
+                bat 'mvn test'
+                junit testResults: '**/surefire-reports/*.xml'
             }
         }
 
         stage('Static Analysis') {
             when {
-                expression { return env.BRANCH_NAME == 'develop' }
+                expression { env.BRANCH_NAME == "develop" }
             }
             steps {
-                sh 'mvn checkstyle:checkstyle'
-                checkStyle canComputeNew: false, pattern: '**/target/checkstyle-result.xml', showViolations: true
-            }
-        }
-
-        stage('Code Coverage') {
-            steps {
-                sh 'mvn jacoco:report'
-                jacoco execPattern: '**/target/jacoco.exec', classPattern: '**/target/classes', sourcePattern: '**/src/main/java'
+                bat 'mvn checkstyle:check'
             }
         }
 
-        stage('Quality Gate') {
+        stage('Code Coverage Report') {
             steps {
-                script {
-                    def coverage = readJSON file: 'target/site/jacoco/index.json'
-                    def lineCoverage = coverage.counter[0].covered * 100 / coverage.counter[0].total
-                    if (lineCoverage < 30) {
-                        error "Line coverage is ${lineCoverage}% which is below the required 30%"
-                    } else {
-                        echo "Line coverage is OK: ${lineCoverage}%"
-                    }
-                }
+                bat 'mvn jacoco:report'
+                jacoco execPattern: '**/target/jacoco.exec'
+                jacoco classPattern: '**/target/classes'
+                jacoco sourcePattern: '**/src/main/java'
             }
         }
 
         stage('Install Artifacts') {
             steps {
-                sh 'mvn install'
+                bat 'mvn install -DskipTests'
             }
         }
 
-        stage('Publish Artifact') {
+        stage('Check Coverage Requirements') {
+            steps {
+                bat 'mvn jacoco:check'
+            }
+        }
+
+        stage('Deploy Artifact') {
             steps {
                 script {
-                    def artifactPath = 'target/your-artifact.jar'
-                    def targetDir = '/opt/jenkins/artifacts/'
-                    sh "cp ${artifactPath} ${targetDir}"
+                    def targetDir = "C:\\artifacts\\${env.BRANCH_NAME}"
+                    bat """
+                        if not exist "${targetDir}" (
+                            mkdir "${targetDir}"
+                        )
+                        copy /Y "app\\target\\*.jar" "${targetDir}\\"
+                    """
                 }
+                archiveArtifacts artifacts: 'app\\target\\*.jar', fingerprint: true
             }
         }
     }
